@@ -1,109 +1,87 @@
-from pathlib import Path
-import os
-import logging
-import requests
-from PIL import Image
-import base64
-from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.response import Response
 from rest_framework.views import APIView
-from drf_yasg import openapi
+from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework import status
 from drf_yasg.utils import swagger_auto_schema
-from .serializers import CaptioningSerializer, ErrorSerializer
+from drf_yasg import openapi
+from PIL import Image
+import easyocr
+import numpy as np
+import base64
+import io
+import requests
+import os
+from dotenv import load_dotenv
 
-# Initialize logger
-logger = logging.getLogger(__name__)
 
-# Load environment variables
-BASE_DIR = Path(__file__).resolve().parent.parent
-API_TOKEN = os.getenv("HUGGING_FACE_API")
-
-# 이미지 파일을 Base64로 변환하는 함수
-def encode_image(file):
-    return base64.b64encode(file.read()).decode("utf-8")
-
-# Hugging Face API 호출 함수
-def query_huggingface_api(file):
-    API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
-    headers = {"Authorization": f"Bearer {API_TOKEN}"}
-
-    # 업로드된 파일을 Base64로 변환
-    image_data = encode_image(file)
-
-    # API 요청 데이터
-    payload = {
-        "inputs": {
-            "image": image_data
-        }
-    }
-
-    try:
-        # Hugging Face API 호출
-        response = requests.post(API_URL, headers=headers, json=payload)
-        response.raise_for_status()  # 상태 코드 확인
-        result = response.json()
-        print(result)
-
-        # API 응답 데이터 확인
-        if isinstance(result, list) and 'generated_text' in result[0]:
-            return result[0]['generated_text']
-        elif 'error' in result:
-            logger.error(f"Hugging Face API error: {result['error']}")
-            return {"error": result['error']}
-        else:
-            logger.error("Unexpected response format from Hugging Face API.")
-            return {"error": "Unexpected response format from Hugging Face API."}
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request to Hugging Face API failed: {e}")
-        return {"error": str(e)}
-    except Exception as e:
-        logger.exception("Unexpected error during Hugging Face API request.")
-        return {"error": "Unexpected error during Hugging Face API request."}
-
-# Django REST Framework API View
-class CaptioningAPIView(APIView):
-    parser_classes = [MultiPartParser, FormParser]
+class AnalyzeImageView(APIView):
+    parser_classes = (MultiPartParser, FormParser)
 
     @swagger_auto_schema(
-        operation_description="Generate caption for the uploaded image",
+        operation_description="이미지 업로드 후 OCR 및 Hugging Face 모델을 통해 분석 결과를 반환합니다.",
         manual_parameters=[
             openapi.Parameter(
-                'image', openapi.IN_FORM, description="Upload image file",
-                type=openapi.TYPE_FILE, required=True
+                'image',
+                openapi.IN_FORM,
+                description="업로드할 이미지 파일",
+                type=openapi.TYPE_FILE,
+                required=True,
             )
         ],
         responses={
-            200: CaptioningSerializer,
-            400: openapi.Response("Bad Request", ErrorSerializer),
-            500: openapi.Response("Internal Server Error", ErrorSerializer)
-        }
+            200: openapi.Response(
+                description="이미지 분석 결과",
+                examples={
+                    "application/json": {
+                        "ocr_text": "추출된 텍스트",
+                        "generated_caption": "생성된 캡션"
+                    }
+                },
+            ),
+            400: "이미지가 업로드되지 않았습니다.",
+        },
     )
     def post(self, request, *args, **kwargs):
+        if 'image' not in request.FILES:
+            return Response({"error": "이미지가 업로드되지 않았습니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        image_file = request.FILES['image']
+
+        # 1. OCR 처리
+        reader = easyocr.Reader(['en', 'ko'])
+        image = Image.open(image_file).convert('RGB')
+        ocr_result = reader.readtext(np.array(image))
+        ocr_text = ' '.join([res[1] for res in ocr_result])
+
+        # 2. Hugging Face API 호출
         try:
-            # 업로드된 파일 가져오기
-            file = request.FILES.get('image')
-            if not file:
-                logger.warning("No image file provided in the request.")
-                return Response({"error": "No image file provided."}, status=400)
-            
-            try:
-                # PIL로 이미지 유효성 확인
-                Image.open(file).convert('RGB')
-            except Exception as e:
-                logger.error(f"Image processing error: {e}")
-                return Response({"error": "Invalid image file."}, status=400)
+            load_dotenv()
+            api_token = os.getenv("HUGGING_FACE_API")
+            API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
+            headers = {"Authorization": f"Bearer {api_token}"}
 
-            # Hugging Face API 호출
-            api_caption = query_huggingface_api(file)
+            # Base64로 인코딩
+            buffered = io.BytesIO()
+            image.save(buffered, format="PNG")
+            image_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-            if isinstance(api_caption, dict) and 'error' in api_caption:
-                logger.error(f"Hugging Face API returned an error: {api_caption['error']}")
-                return Response({"error": api_caption['error']}, status=500)
+            payload = {
+                "inputs": {
+                    "image": image_base64
+                }
+            }
 
-            # 결과 반환
-            return Response({
-                "api_caption": api_caption
-            }, status=200)
+            response = requests.post(API_URL, headers=headers, json=payload)
+            if response.status_code == 200:
+                generated_caption = response.json()[0].get("generated_text", "캡션 생성 실패")
+            else:
+                generated_caption = f"Hugging Face API 오류: {response.text}"
+
         except Exception as e:
-            logger.exception("Unexpected error in CaptioningAPIView.")
-            return Response({"error": "Internal Server Error"}, status=500)
+            generated_caption = f"Hugging Face API 호출 실패: {str(e)}"
+
+        # 결과 반환
+        return Response({
+            "ocr_text": ocr_text,
+            "generated_caption": generated_caption
+        }, status=status.HTTP_200_OK)
