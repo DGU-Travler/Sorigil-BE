@@ -1,68 +1,67 @@
-from drf_yasg import openapi
-from drf_yasg.utils import swagger_auto_schema
-from rest_framework import serializers
 from rest_framework.views import APIView
-from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
-from django.http import HttpResponse
-import re
-from .serializers import CleanedHTMLSerializer
+from rest_framework import status
+from .serializers import FindDivSerializer
+from bs4 import BeautifulSoup
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
-# 오류 응답을 위한 Serializer 정의
-class ErrorSerializer(serializers.Serializer):
-    error = serializers.CharField()
-
-class CleanView(APIView):
-    permission_classes = []  # 인증 필요 없음
-    parser_classes = [MultiPartParser, FormParser]  # 파일 업로드 처리
-
-    # Swagger에서 파일 파라미터 정의
-    html_file_param = openapi.Parameter(
-        'html_file',
-        in_=openapi.IN_FORM,
-        type=openapi.TYPE_FILE,
-        description='Upload HTML file to clean and process',
-        required=True
-    )
-
+class FindElementsAPIView(APIView):
     @swagger_auto_schema(
-        operation_description="Upload an HTML file to clean and process.",
-        manual_parameters=[html_file_param],
+        operation_description="HTML 코드와 검색어를 받아 해당 검색어를 포함하는 모든 HTML 요소를 반환합니다.",
+        request_body=FindDivSerializer,
         responses={
-            200: CleanedHTMLSerializer,
-            400: openapi.Response('Invalid input or no content found', ErrorSerializer)
+            200: openapi.Response(
+                description="성공적으로 HTML 요소를 찾았습니다.",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'elements': openapi.Schema(
+                            type=openapi.TYPE_ARRAY,
+                            items=openapi.Schema(type=openapi.TYPE_STRING, description='찾은 HTML 요소의 문자열')
+                        )
+                    }
+                )
+            ),
+            404: openapi.Response(
+                description="검색어를 포함하는 HTML 요소를 찾을 수 없습니다.",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'error': openapi.Schema(type=openapi.TYPE_STRING, description='에러 메시지')
+                    }
+                )
+            ),
+            400: openapi.Response(
+                description="잘못된 입력입니다.",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'html_code': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Items(type=openapi.TYPE_STRING)),
+                        'search_term': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Items(type=openapi.TYPE_STRING)),
+                    }
+                )
+            ),
         }
     )
-    def post(self, request):
-        # 파일 받아오기
-        html_file = request.FILES.get('html_file', None)
+    def post(self, request, format=None):
+        serializer = FindDivSerializer(data=request.data)
+        if serializer.is_valid():
+            html_code = serializer.validated_data['html_code']
+            search_term = serializer.validated_data['search_term']
 
-        if not html_file:
-            return Response({'error': 'html_file parameter must be provided'}, status=400)
+            soup = BeautifulSoup(html_code, 'html.parser')
 
-        try:
-            # 파일을 읽어 HTML 코드로 변환
-            html_code = html_file.read().decode('utf-8')
-        except Exception as e:
-            return Response({'error': f'Failed to read the uploaded file: {str(e)}'}, status=400)
+            # 검색어가 포함된 모든 요소 찾기
+            matching_elements = []
+            for element in soup.find_all(True):  # 모든 태그 탐색
+                if search_term in element.get_text():
+                    matching_elements.append(str(element))
 
-        # HTML 전처리 (특정 부분 삭제)
-        cleaned_html = self.remove_square_brackets(html_code)
-
-        # 텍스트 파일로 응답
-        if 'download' in request.query_params:  # 다운로드 요청이 있으면 텍스트 파일로 응답
-            response = HttpResponse(
-                cleaned_html,
-                content_type='text/plain',
-            )
-            response['Content-Disposition'] = 'attachment; filename="cleaned_html.txt"'
-            return response
-
-        return Response({
-            'cleaned_html': cleaned_html[:100000],  # cleaned_html의 크기를 100KB로 제한
-        })
-
-    def remove_square_brackets(self, html_code):
-        # 정규 표현식을 사용해 대괄호 [] 안의 내용 제거
-        cleaned_html = re.sub(r'\[.*?\]', '', html_code)
-        return cleaned_html
+            if matching_elements:
+                return Response({'elements': matching_elements}, status=status.HTTP_200_OK)
+            else:
+                return Response({'error': '해당 검색어를 포함하는 HTML 요소를 찾을 수 없습니다.'},
+                                status=status.HTTP_404_NOT_FOUND)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

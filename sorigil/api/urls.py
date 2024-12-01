@@ -1,11 +1,11 @@
 from django.urls import path
 from .captionning import AnalyzeImageView
-from .htmlutils import CleanView
+from .htmlutils import FindElementsAPIView
 from .api import ContentVoiceAPI, VoiceCommandAPI, DynamicContentUpdatesAPI, FormLabelsAPI, TTSSettingsAPI, AltTextAPI
 app_name = 'api'
 
 urlpatterns = [
-    path('clean/', CleanView.as_view(), name='clean-html'),
+    path('find/', FindElementsAPIView.as_view(), name='clean-html'),
     path('analyze/', AnalyzeImageView.as_view(), name='analyze'),
     path('content-voice/', ContentVoiceAPI.as_view(), name='content-voice'),
     path('voice-command/', VoiceCommandAPI.as_view(), name='voice-command'),
