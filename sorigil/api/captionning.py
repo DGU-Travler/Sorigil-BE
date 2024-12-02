@@ -12,7 +12,9 @@ import io
 import requests
 import os
 from dotenv import load_dotenv
-
+import openai
+load_dotenv()
+openai.api_key = os.getenv("GPT_API")
 
 class AnalyzeImageView(APIView):
     parser_classes = (MultiPartParser, FormParser)
@@ -46,13 +48,16 @@ class AnalyzeImageView(APIView):
             return Response({"error": "이미지가 업로드되지 않았습니다."}, status=status.HTTP_400_BAD_REQUEST)
 
         image_file = request.FILES['image']
-
+        '''
         # 1. OCR 처리
-        reader = easyocr.Reader(['en', 'ko'])
-        image = Image.open(image_file).convert('RGB')
-        ocr_result = reader.readtext(np.array(image))
-        ocr_text = ' '.join([res[1] for res in ocr_result])
-
+        try:
+            reader = easyocr.Reader(['en', 'ko'])
+            image = Image.open(image_file).convert('RGB')
+            ocr_result = reader.readtext(np.array(image))
+            ocr_text = ' '.join([res[1] for res in ocr_result])
+        except Exception as e:
+            return Response({"error": f"OCR 처리 중 오류 발생: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        '''
         # 2. Hugging Face API 호출
         try:
             load_dotenv()
@@ -61,6 +66,7 @@ class AnalyzeImageView(APIView):
             headers = {"Authorization": f"Bearer {api_token}"}
 
             # Base64로 인코딩
+            image = Image.open(image_file).convert("RGB")
             buffered = io.BytesIO()
             image.save(buffered, format="PNG")
             image_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -72,16 +78,41 @@ class AnalyzeImageView(APIView):
             }
 
             response = requests.post(API_URL, headers=headers, json=payload)
+            response.raise_for_status()  # HTTP 오류 발생 시 예외 처리
+
             if response.status_code == 200:
                 generated_caption = response.json()[0].get("generated_text", "캡션 생성 실패")
             else:
                 generated_caption = f"Hugging Face API 오류: {response.text}"
 
+        except requests.exceptions.SSLError as ssl_error:
+            generated_caption = f"SSL 인증 오류 발생: {str(ssl_error)}"
+        except requests.exceptions.RequestException as req_error:
+            generated_caption = f"Hugging Face API 호출 중 요청 오류 발생: {str(req_error)}"
         except Exception as e:
             generated_caption = f"Hugging Face API 호출 실패: {str(e)}"
+        
+        try:
+            system_prompt = """
+            너는 입력된 내용을 간결하고 이해하기 쉽게 바꿔주는 역할을 수행해. 
+            중요한 정보는 남기되, 불필요한 표현은 줄여서 명확하게 전달하는 데 초점을 맞춰줘.
+            한글로 번역해줘.
+            """
+
+            messages = [{"role": "system", "content": system_prompt.strip()},
+                        {"role": "user", "content": generated_caption.strip()}]
+            
+            get_response = openai.ChatCompletion.create(
+                model="gpt-4",  # 사용하려는 모델 이름
+                messages=messages
+            )
+            translated_caption = get_response.choices[0].message.content.strip()
+        except Exception as e:
+            translated_caption = f"GPT-3 API 호출 실패:{str(e)}"
 
         # 결과 반환
         return Response({
-            "ocr_text": ocr_text,
-            "generated_caption": generated_caption
+            #"ocr_text": ocr_text,
+            "generated_caption": generated_caption,
+            "translated_caption": translated_caption
         }, status=status.HTTP_200_OK)
