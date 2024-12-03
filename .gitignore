@@ -222,7 +222,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+sorigil/.env
 .venv
 env/
 venv/

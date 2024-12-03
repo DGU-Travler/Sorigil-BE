@@ -15,6 +15,11 @@ from dotenv import load_dotenv
 import openai
 load_dotenv()
 openai.api_key = os.getenv("GPT_API")
+import logging
+
+# 로깅 설정 (필요에 따라 로깅 레벨 설정)
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 class AnalyzeImageView(APIView):
     parser_classes = (MultiPartParser, FormParser)
@@ -48,7 +53,7 @@ class AnalyzeImageView(APIView):
             return Response({"error": "이미지가 업로드되지 않았습니다."}, status=status.HTTP_400_BAD_REQUEST)
 
         image_file = request.FILES['image']
-        
+
         # 1. OCR 처리
         try:
             reader = easyocr.Reader(['en', 'ko'])
@@ -58,7 +63,7 @@ class AnalyzeImageView(APIView):
         except Exception as e:
             Response({"error": f"OCR 처리 중 오류 발생: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             ocr_text = "OCR 처리 실패"
-        
+
         # 2. Hugging Face API 호출
         try:
             load_dotenv()
@@ -86,16 +91,18 @@ class AnalyzeImageView(APIView):
             else:
                 generated_caption = f"Hugging Face API 오류: {response.text}"
 
+            # 디버깅: 터미널에 생성된 캡션 출력
+            logging.debug(f"Generated Caption: {generated_caption}")
+
         except requests.exceptions.SSLError as ssl_error:
             generated_caption = f"SSL 인증 오류 발생: {str(ssl_error)}"
         except requests.exceptions.RequestException as req_error:
             generated_caption = f"Hugging Face API 호출 중 요청 오류 발생: {str(req_error)}"
         except Exception as e:
             generated_caption = f"Hugging Face API 호출 실패: {str(e)}"
-        
+
         total_result = f"ocr_text: {ocr_text}, generated_caption: {generated_caption}"
         total_result = total_result.replace("\\", " ")
-
 
         try:
             system_prompt = """
@@ -107,12 +114,16 @@ class AnalyzeImageView(APIView):
 
             messages = [{"role": "system", "content": system_prompt.strip()},
                         {"role": "user", "content": total_result.strip()}]
-            
+
             get_response = openai.ChatCompletion.create(
                 model="gpt-4",  # 사용하려는 모델 이름
                 messages=messages
             )
             translated_caption = get_response.choices[0].message.content.strip()
+
+            # 디버깅: 터미널에 번역된 캡션 출력
+            logging.debug(f"Translated Caption: {translated_caption}")
+
         except Exception as e:
             translated_caption = f"GPT-4 API 호출 실패:{str(e)}"
 
