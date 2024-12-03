@@ -48,7 +48,7 @@ class AnalyzeImageView(APIView):
             return Response({"error": "이미지가 업로드되지 않았습니다."}, status=status.HTTP_400_BAD_REQUEST)
 
         image_file = request.FILES['image']
-        '''
+        
         # 1. OCR 처리
         try:
             reader = easyocr.Reader(['en', 'ko'])
@@ -57,7 +57,7 @@ class AnalyzeImageView(APIView):
             ocr_text = ' '.join([res[1] for res in ocr_result])
         except Exception as e:
             return Response({"error": f"OCR 처리 중 오류 발생: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        '''
+        
         # 2. Hugging Face API 호출
         try:
             load_dotenv()
@@ -92,6 +92,10 @@ class AnalyzeImageView(APIView):
         except Exception as e:
             generated_caption = f"Hugging Face API 호출 실패: {str(e)}"
         
+        total_result = f"ocr_text: {ocr_text}, generated_caption: {generated_caption}"
+        total_result = total_result.replace("\\", " ")
+
+
         try:
             system_prompt = """
             너는 입력된 내용을 간결하고 이해하기 쉽게 바꿔주는 역할을 수행해. 
@@ -100,7 +104,7 @@ class AnalyzeImageView(APIView):
             """
 
             messages = [{"role": "system", "content": system_prompt.strip()},
-                        {"role": "user", "content": generated_caption.strip()}]
+                        {"role": "user", "content": total_result.strip()}]
             
             get_response = openai.ChatCompletion.create(
                 model="gpt-4",  # 사용하려는 모델 이름
@@ -108,11 +112,10 @@ class AnalyzeImageView(APIView):
             )
             translated_caption = get_response.choices[0].message.content.strip()
         except Exception as e:
-            translated_caption = f"GPT-3 API 호출 실패:{str(e)}"
+            translated_caption = f"GPT-4 API 호출 실패:{str(e)}"
 
         # 결과 반환
         return Response({
-            #"ocr_text": ocr_text,
-            "generated_caption": generated_caption,
+            "best_caption": total_result,
             "translated_caption": translated_caption
         }, status=status.HTTP_200_OK)

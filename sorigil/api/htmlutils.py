@@ -1,67 +1,78 @@
+# api/views.py
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .serializers import FindDivSerializer
-from bs4 import BeautifulSoup
-from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
+from .serializers import HTMLFileSerializer
+import re
+import openai
+import os
+from dotenv import load_dotenv
+class ProcessHTMLView(APIView):
+    """
+    HTML 파일을 처리하여 'www.' 또는 'https:'가 포함된 라인과 그 전후 라인을 남기고,
+    남은 HTML에서 [, ], \ 문자를 제거합니다.
+    """
 
-class FindElementsAPIView(APIView):
-    @swagger_auto_schema(
-        operation_description="HTML 코드와 검색어를 받아 해당 검색어를 포함하는 모든 HTML 요소를 반환합니다.",
-        request_body=FindDivSerializer,
-        responses={
-            200: openapi.Response(
-                description="성공적으로 HTML 요소를 찾았습니다.",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={
-                        'elements': openapi.Schema(
-                            type=openapi.TYPE_ARRAY,
-                            items=openapi.Schema(type=openapi.TYPE_STRING, description='찾은 HTML 요소의 문자열')
-                        )
-                    }
-                )
-            ),
-            404: openapi.Response(
-                description="검색어를 포함하는 HTML 요소를 찾을 수 없습니다.",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={
-                        'error': openapi.Schema(type=openapi.TYPE_STRING, description='에러 메시지')
-                    }
-                )
-            ),
-            400: openapi.Response(
-                description="잘못된 입력입니다.",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={
-                        'html_code': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Items(type=openapi.TYPE_STRING)),
-                        'search_term': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Items(type=openapi.TYPE_STRING)),
-                    }
-                )
-            ),
-        }
-    )
     def post(self, request, format=None):
-        serializer = FindDivSerializer(data=request.data)
+        serializer = HTMLFileSerializer(data=request.data)
         if serializer.is_valid():
-            html_code = serializer.validated_data['html_code']
-            search_term = serializer.validated_data['search_term']
+            html_file = serializer.validated_data['html_file']
+            try:
+                # 파일을 문자열로 읽기
+                content = html_file.read().decode('utf-8')
+                lines = content.splitlines()
+                total_lines = len(lines)
+                '''
+                # 'www.' 또는 'https:' 패턴
+                pattern = re.compile(r'(www\.|https?:)', re.IGNORECASE)
 
-            soup = BeautifulSoup(html_code, 'html.parser')
+                # 링크가 있는 라인 번호 저장
+                link_line_indices = set()
+                for idx, line in enumerate(lines):
+                    if pattern.search(line):
+                        link_line_indices.add(idx)
 
-            # 검색어가 포함된 모든 요소 찾기
-            matching_elements = []
-            for element in soup.find_all(True):  # 모든 태그 탐색
-                if search_term in element.get_text():
-                    matching_elements.append(str(element))
+                # 남겨야 할 라인 번호 계산 (링크 라인과 그 전후 라인)
+                keep_line_indices = set()
+                for idx in link_line_indices:
+                    keep_line_indices.add(idx)
+                    if idx - 1 >= 0:
+                        keep_line_indices.add(idx - 1)
+                    if idx + 1 < total_lines:
+                        keep_line_indices.add(idx + 1)
 
-            if matching_elements:
-                return Response({'elements': matching_elements}, status=status.HTTP_200_OK)
-            else:
-                return Response({'error': '해당 검색어를 포함하는 HTML 요소를 찾을 수 없습니다.'},
-                                status=status.HTTP_404_NOT_FOUND)
+                # 남겨진 라인들을 모아서 새로운 HTML 생성
+                kept_lines = [lines[idx] for idx in sorted(keep_line_indices)]
+
+                # [, ], \ 문자 제거
+                cleaned_lines = [re.sub(r'[\[\]\\]', '', line) for line in kept_lines]
+                processed_html = '\n'.join(cleaned_lines)
+
+                '''
+                load_dotenv()
+                openai.api_key = os.getenv("GPT_API")
+                print(len(content))
+                try:
+                    system_prompt = """
+                    너는 제공된 html 코드를 간결하고 이해하기 쉽게 바꿔주는 역할을 수행해.
+                    각 라인에는 'www.' 또는 'https:'가 포함되어 있으며, 이 라인과 그 전후 라인이 있어
+                    이걸 통해서 해당 링크가 어떤 내용을 담고 있는지 알 수 있어야 해.
+                    링크와 그에 해당하는 정보를 남겨줘. 모든 링크에 대해 해줘야해
+                    형식은 ex) "https://www.google.com" - "구글" 이런식으로 제공해줘.
+                    """
+                    messages = [{"role": "system", "content": system_prompt.strip()},
+                                {"role": "user", "content": content.strip()}]
+                    get_response = openai.ChatCompletion.create(
+                        model="gpt-4o-mini",  # 사용하려는 모델 이름
+                        messages=messages
+                    )
+                    PostProcessing_html = get_response.choices[0].message.content.strip()
+                except Exception as e:
+                    PostProcessing_html = f"GPT-4 API 호출 실패:{str(e)}"
+                
+                return Response({'processed_html': PostProcessing_html}, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
