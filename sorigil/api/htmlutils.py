@@ -18,6 +18,7 @@ class ProcessHTMLView(APIView):
         serializer = HTMLFileSerializer(data=request.data)
         if serializer.is_valid():
             html_file = serializer.validated_data['html_file']
+            search_term = serializer.validated_data['search_term']
             try:
                 # 파일을 문자열로 읽기
                 content = html_file.read().decode('utf-8')
@@ -52,14 +53,14 @@ class ProcessHTMLView(APIView):
                 '''
                 load_dotenv()
                 openai.api_key = os.getenv("GPT_API")
-                print(len(content))
                 try:
-                    system_prompt = """
-                    너는 제공된 html 코드를 간결하고 이해하기 쉽게 바꿔주는 역할을 수행해.
-                    각 라인에는 'www.' 또는 'https:'가 포함되어 있으며, 이 라인과 그 전후 라인이 있어
-                    이걸 통해서 해당 링크가 어떤 내용을 담고 있는지 알 수 있어야 해.
-                    링크와 그에 해당하는 정보를 남겨줘. 모든 링크에 대해 해줘야해
-                    형식은 ex) "https://www.google.com" - "구글" 이런식으로 제공해줘.
+                    system_prompt = f"""
+                    Find all HTML elements related to the term "{search_term}". Include elements that:
+                    - Contain "{search_term}" in their inner text.
+                    - Have an attribute (like `id`, `class`, `name`, or `data-*`) that includes "{search_term}".
+                    Return the tag name, attributes, and inner text for each matching element.
+                    'https://www. 와 같이 링크가 포함된 라인은 특히 중요합니다.'
+                    코멘트는 따로 달지 마세요. 호출한 것만 해주면 됩니다.
                     """
                     messages = [{"role": "system", "content": system_prompt.strip()},
                                 {"role": "user", "content": content.strip()}]
@@ -67,11 +68,11 @@ class ProcessHTMLView(APIView):
                         model="gpt-4o-mini",  # 사용하려는 모델 이름
                         messages=messages
                     )
-                    PostProcessing_html = get_response.choices[0].message.content.strip()
+                    processed_data = get_response.choices[0].message.content.strip()
                 except Exception as e:
-                    PostProcessing_html = f"GPT-4 API 호출 실패:{str(e)}"
+                    processed_data = f"GPT-4 API 호출 실패:{str(e)}"
                 
-                return Response({'processed_html': PostProcessing_html}, status=status.HTTP_200_OK)
+                return Response({'processed_data': processed_data}, status=status.HTTP_200_OK)
             except Exception as e:
                 return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         else:

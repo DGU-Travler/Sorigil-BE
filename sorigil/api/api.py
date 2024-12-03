@@ -4,11 +4,14 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework import status
 from django.core.files.base import ContentFile
 import requests
+import json
 import os
 import base64
+from dotenv import load_dotenv
 
 # 환경 변수에서 Hugging Face API 토큰 가져오기
 API_TOKEN = os.getenv('HUGGING_FACE_API')
+accessKey = os.getenv('ETRI_API_KEY')
 
 # 공통 함수: 이미지 파일을 Base64로 인코딩
 def encode_image(file):
@@ -52,20 +55,42 @@ class ContentVoiceAPI(APIView):
 
 # 2. `/voice-command` - 음성 명령 처리 API
 class VoiceCommandAPI(APIView):
-    def post(self, request, *args, **kwargs):
-        command = request.data.get('command')
-        if not command:
-            return Response({"error": "No command provided."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 명령어 매핑 및 처리
-        command_map = {
-            "login": "로그인 페이지로 이동",
-            "search": "검색 기능 활성화",
-            "home": "홈 페이지로 이동"
-        }
-        response = command_map.get(command.lower(), "Unknown command")
-        return Response({"response": response}, status=status.HTTP_200_OK)
-
+    def post(self, request):
+        try:
+            audio_base64 = request.data.get('audio')
+            if not audio_base64:
+                return Response({"error": "No audio data provided."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # ETRI API 정보
+            openApiURL = "http://aiopen.etri.re.kr:8000/WiseASR/Recognition"
+            languageCode = "korean"
+            
+            # JSON 요청 생성
+            requestJson = {
+                "argument": {
+                    "language_code": languageCode,
+                    "audio": audio_base64
+                }
+            }
+            
+            headers = {
+                "Content-Type": "application/json; charset=UTF-8",
+                "Authorization": accessKey
+            }
+            
+            # ETRI API 요청
+            response = requests.post(openApiURL, headers=headers, data=json.dumps(requestJson))
+            
+            # 응답 처리
+            if response.status_code == 200:
+                responseData = response.json()
+                transcript = responseData.get("return_object", {}).get("recognized", "")
+                return Response({"transcript": transcript}, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": f"ETRI API Error: {response.status_code}"}, status=response.status_code)
+        
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 # 3. `/dynamic-content-updates` - 동적 콘텐츠 업데이트 감지 API
 class DynamicContentUpdatesAPI(APIView):
     def post(self, request, *args, **kwargs):
@@ -98,27 +123,3 @@ class TTSSettingsAPI(APIView):
         # TTS 설정 저장 로직 (예제)
         settings = {"speed": speed, "volume": volume}
         return Response({"settings": settings}, status=status.HTTP_200_OK)
-
-# 6. `/alt-text` - 이미지 대체 텍스트 생성 API
-class AltTextAPI(APIView):
-    parser_classes = [MultiPartParser, FormParser]
-
-    def post(self, request, *args, **kwargs):
-        file = request.FILES.get('image')
-        if not file:
-            return Response({"error": "No image file provided."}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            # 이미지 파일 인코딩 및 Hugging Face API 호출
-            image_data = encode_image(file)
-            result = query_huggingface_api(
-                image_data, 
-                "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
-            )
-
-            if 'error' in result:
-                return Response({"error": result['error']}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            return Response({"alt_text": result}, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -25,7 +25,6 @@ device_index = 1
 record_seconds = 5
 
 
-
 p = pyaudio.PyAudio()
 stream = p.open(format=FORMAT,
                 channels=Channels,

@@ -9,4 +9,5 @@ class ErrorSerializer(serializers.Serializer):
     error = serializers.CharField()
 
 class HTMLFileSerializer(serializers.Serializer):
-    html_file = serializers.FileField()
+    html_file = serializers.FileField(required=True)
+    search_term = serializers.CharField(required=True)

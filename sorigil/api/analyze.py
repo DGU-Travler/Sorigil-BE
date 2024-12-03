@@ -56,7 +56,8 @@ class AnalyzeImageView(APIView):
             ocr_result = reader.readtext(np.array(image))
             ocr_text = ' '.join([res[1] for res in ocr_result])
         except Exception as e:
-            return Response({"error": f"OCR 처리 중 오류 발생: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            Response({"error": f"OCR 처리 중 오류 발생: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            ocr_text = "OCR 처리 실패"
         
         # 2. Hugging Face API 호출
         try:
@@ -100,6 +101,7 @@ class AnalyzeImageView(APIView):
             system_prompt = """
             너는 입력된 내용을 간결하고 이해하기 쉽게 바꿔주는 역할을 수행해. 
             중요한 정보는 남기되, 불필요한 표현은 줄여서 명확하게 전달하는 데 초점을 맞춰줘.
+            텍스트 인식 실패, 생성된 묘사 이런거 빼고 표현된 것만 전달해줘.
             한글로 번역해줘.
             """
 
